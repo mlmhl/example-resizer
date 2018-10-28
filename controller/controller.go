@@ -8,6 +8,7 @@ import (
 
 	"github.com/golang/glog"
 	"k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -74,26 +75,42 @@ func NewResizeController(
 	pvcInformer.Informer().AddEventHandlerWithResyncPeriod(cache.ResourceEventHandlerFuncs{
 		AddFunc:    ctrl.addPVC,
 		UpdateFunc: ctrl.updatePVC,
-		// TODO: Do we need a delete event handler?
+		DeleteFunc: ctrl.deletePVC,
 	}, resyncPeriod)
 
 	return ctrl
 }
 
 func (ctrl *resizeController) addPVC(obj interface{}) {
-	if unknown, ok := obj.(cache.DeletedFinalStateUnknown); ok && unknown.Obj != nil {
-		obj = unknown.Obj
-	}
-	objName, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
+	objKey, err := getPVCKey(obj)
 	if err != nil {
-		glog.Errorf("Failed to get key from object: %v", err)
 		return
 	}
-	ctrl.claimQueue.Add(objName)
+	ctrl.claimQueue.Add(objKey)
 }
 
 func (ctrl *resizeController) updatePVC(_, newObj interface{}) {
 	ctrl.addPVC(newObj)
+}
+
+func (ctrl *resizeController) deletePVC(obj interface{}) {
+	objKey, err := getPVCKey(obj)
+	if err != nil {
+		return
+	}
+	ctrl.claimQueue.Forget(objKey)
+}
+
+func getPVCKey(obj interface{}) (string, error) {
+	if unknown, ok := obj.(cache.DeletedFinalStateUnknown); ok && unknown.Obj != nil {
+		obj = unknown.Obj
+	}
+	objKey, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
+	if err != nil {
+		glog.Errorf("Failed to get key from object: %v", err)
+		return "", err
+	}
+	return objKey, nil
 }
 
 func (ctrl *resizeController) Run(workers int, stopCh <-chan struct{}) {
@@ -141,6 +158,10 @@ func (ctrl *resizeController) syncPVC(key string) error {
 
 	pvc, err := ctrl.pvcLister.PersistentVolumeClaims(namespace).Get(name)
 	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			glog.V(3).Infof("PVC %s/%s is deleted, no need to process it", namespace, name)
+			return nil
+		}
 		glog.Errorf("Get PVC %s/%s failed: %v", namespace, name, err)
 		return err
 	}
@@ -152,6 +173,10 @@ func (ctrl *resizeController) syncPVC(key string) error {
 
 	pv, err := ctrl.pvLister.Get(pvc.Spec.VolumeName)
 	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			glog.V(3).Infof("PV %s is deleted, no need to process it", pvc.Spec.VolumeName)
+			return nil
+		}
 		glog.Errorf("Get PV %q of pvc %q failed: %v", pvc.Spec.VolumeName, util.PVCKey(pvc), err)
 		return err
 	}
