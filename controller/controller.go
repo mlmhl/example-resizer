@@ -181,7 +181,7 @@ func (ctrl *resizeController) syncPVC(key string) error {
 		return err
 	}
 
-	if !ctrl.pvNeedResize(pv) {
+	if !ctrl.pvNeedResize(pvc, pv) {
 		glog.V(4).Infof("No need to resize PV %q", pv.Name)
 		return nil
 	}
@@ -202,11 +202,31 @@ func (ctrl *resizeController) pvcNeedResize(pvc *v1.PersistentVolumeClaim) bool 
 	return requestSize.Cmp(actualSize) > 0
 }
 
-func (ctrl *resizeController) pvNeedResize(pv *v1.PersistentVolume) bool {
+func (ctrl *resizeController) pvNeedResize(pvc *v1.PersistentVolumeClaim, pv *v1.PersistentVolume) bool {
 	if !ctrl.resizer.CanSupport(pv) {
 		glog.V(4).Infof("Resizer %q doesn't support PV %q", ctrl.identity, pv.Name)
 		return false
 	}
+
+	pvSize := pv.Spec.Capacity[v1.ResourceStorage]
+	requestSize := pvc.Spec.Resources.Requests[v1.ResourceStorage]
+	if pvSize.Cmp(requestSize) >= 0 {
+		// If PV size is equal or bigger than request size, that means we have already resized PV.
+		// In this case we need to check PVC's condition.
+		// 1. If PVC in PersistentVolumeClaimResizing condition, we should continue to perform the
+		//    resizing operation as we need to know if file system resize if required. (What's more,
+		//    we hope the driver can find that the actual size already matched the request size and do nothing).
+		// 2. If PVC in PersistentVolumeClaimFileSystemResizePending condition, we need to
+		//    do nothing as kubelet will finish file system resizing and mark resize as finished.
+		if util.HasFileSystemResizePendingCondition(pvc) {
+			// This is case 2.
+			return false
+		}
+		// This is case 1.
+		return true
+	}
+
+	// PV size is smaller than request size, we need to resize the volume.
 	return true
 }
 

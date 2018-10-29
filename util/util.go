@@ -96,3 +96,12 @@ func getPatchData(oldObj, newObj interface{}) ([]byte, error) {
 	}
 	return patchBytes, nil
 }
+
+func HasFileSystemResizePendingCondition(pvc *v1.PersistentVolumeClaim) bool {
+	for _, condition := range pvc.Status.Conditions {
+		if condition.Type == v1.PersistentVolumeClaimFileSystemResizePending && condition.Status == v1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
