@@ -9,18 +9,19 @@ import (
 
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"github.com/mlmhl/external-resizer/util"
 )
 
-const (
-	ResizerName = "HostPath"
-
-	sizeFileName = "kubernetes-host-path-size"
-)
+const sizeFileName = "kubernetes-host-path-size"
 
 // This Resizer is meant for development and testing only and WILL NOT WORK in a multi-node cluster.
 // Will create a size file under host path to indicate the latest size.
 func New() controller.Resizer {
 	return hostPathResizer{}
+}
+
+func Name() string {
+	return util.SanitizeName("kubernetes.io/host-path")
 }
 
 type hostPathResizer struct{}

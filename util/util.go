@@ -3,6 +3,7 @@ package util
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -104,4 +105,14 @@ func HasFileSystemResizePendingCondition(pvc *v1.PersistentVolumeClaim) bool {
 		}
 	}
 	return false
+}
+
+func SanitizeName(name string) string {
+	re := regexp.MustCompile("[^a-zA-Z0-9-]")
+	name = re.ReplaceAllString(name, "-")
+	if name[len(name)-1] == '-' {
+		// name must not end with '-'
+		name = name + "X"
+	}
+	return name
 }

@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -23,7 +24,7 @@ import (
 )
 
 type ResizeController interface {
-	Run(workers int, stopCh <-chan struct{})
+	Run(workers int, stopCh <-chan struct{}, leaderElectionConfig *util.LeaderElectionConfig)
 }
 
 type resizeController struct {
@@ -113,23 +114,38 @@ func getPVCKey(obj interface{}) (string, error) {
 	return objKey, nil
 }
 
-func (ctrl *resizeController) Run(workers int, stopCh <-chan struct{}) {
-	defer ctrl.claimQueue.ShutDown()
+func (ctrl *resizeController) Run(
+	threadiness int, stopCh <-chan struct{},
+	leaderElectionConfig *util.LeaderElectionConfig) {
+	run := func(_ context.Context) {
+		defer ctrl.claimQueue.ShutDown()
 
-	glog.Infof("Starting external resizer %s", ctrl.identity)
-	defer glog.Infof("Shutting down external resizer %s", ctrl.identity)
+		glog.Infof("Starting external resizer %s", ctrl.identity)
+		defer glog.Infof("Shutting down external resizer %s", ctrl.identity)
 
-	ctrl.informerFactory.Start(stopCh)
-	if !cache.WaitForCacheSync(stopCh, ctrl.pvSynced, ctrl.pvcSynced) {
-		glog.Errorf("Cannot sync pv/pvc caches")
-		return
+		ctrl.informerFactory.Start(stopCh)
+		if !cache.WaitForCacheSync(stopCh, ctrl.pvSynced, ctrl.pvcSynced) {
+			glog.Errorf("Cannot sync pv/pvc caches")
+			return
+		}
+
+		for i := 0; i < threadiness; i++ {
+			go wait.Until(ctrl.syncPVCs, 0, stopCh)
+		}
+
+		<-stopCh
 	}
 
-	for i := 0; i < workers; i++ {
-		go wait.Until(ctrl.syncPVCs, 0, stopCh)
+	if leaderElectionConfig == nil {
+		// Leader election disabled.
+		run(context.TODO())
+	} else {
+		lock, err := util.NewLeaderLock(ctrl.kubeClient, ctrl.eventRecorder, leaderElectionConfig)
+		if err != nil {
+			glog.Fatalf("Error creating leader election lock: %v", err)
+		}
+		util.RunAsLeader(lock, leaderElectionConfig, run)
 	}
-
-	<-stopCh
 }
 
 func (ctrl *resizeController) syncPVCs() {
