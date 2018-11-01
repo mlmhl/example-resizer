@@ -24,8 +24,10 @@ import (
 )
 
 type ResizeController interface {
-	Run(workers int, stopCh <-chan struct{}, leaderElectionConfig *util.LeaderElectionConfig)
+	Run(workers int, stopCh <-chan struct{}, metricConfig *MetricConfig, leaderElectionConfig *util.LeaderElectionConfig)
 }
+
+type resizeFunc func(pvc *v1.PersistentVolumeClaim, pv *v1.PersistentVolume) error
 
 type resizeController struct {
 	identity        string
@@ -38,6 +40,9 @@ type resizeController struct {
 	pvcLister       corelisters.PersistentVolumeClaimLister
 	pvcSynced       cache.InformerSynced
 	informerFactory informers.SharedInformerFactory
+
+	// Extract the actual resize operation as an interface so that we can add metrics flexible.
+	resizeFunc resizeFunc
 }
 
 func NewResizeController(
@@ -115,13 +120,22 @@ func getPVCKey(obj interface{}) (string, error) {
 }
 
 func (ctrl *resizeController) Run(
-	threadiness int, stopCh <-chan struct{},
+	threadiness int,
+	stopCh <-chan struct{},
+	metricConfig *MetricConfig,
 	leaderElectionConfig *util.LeaderElectionConfig) {
 	run := func(_ context.Context) {
 		defer ctrl.claimQueue.ShutDown()
 
 		glog.Infof("Starting external resizer %s", ctrl.identity)
 		defer glog.Infof("Shutting down external resizer %s", ctrl.identity)
+
+		if metricConfig == nil {
+			ctrl.resizeFunc = ctrl.resizePVC
+		} else {
+			ctrl.resizeFunc = resizeFuncWithMetrics(ctrl.resizePVC)
+			go startMetricsServer(metricConfig)
+		}
 
 		ctrl.informerFactory.Start(stopCh)
 		if !cache.WaitForCacheSync(stopCh, ctrl.pvSynced, ctrl.pvcSynced) {
@@ -202,7 +216,7 @@ func (ctrl *resizeController) syncPVC(key string) error {
 		return nil
 	}
 
-	return ctrl.resizePVC(pvc, pv)
+	return ctrl.resizeFunc(pvc, pv)
 }
 
 func (ctrl *resizeController) pvcNeedResize(pvc *v1.PersistentVolumeClaim) bool {

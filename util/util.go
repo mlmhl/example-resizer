@@ -116,3 +116,11 @@ func SanitizeName(name string) string {
 	}
 	return name
 }
+
+func GetPVCStorageClass(pvc *v1.PersistentVolumeClaim) string {
+	sc := pvc.Spec.StorageClassName
+	if sc == nil {
+		return ""
+	}
+	return *sc
+}

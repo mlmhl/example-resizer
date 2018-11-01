@@ -41,6 +41,10 @@ var (
 			"slot. This is effectively the maximum duration that a leader can be stopped "+
 			"before it is replaced by another candidate. This is only applicable if leader "+
 			"election is enabled.")
+
+	enableMetrics = flag.Bool("enable-metrics", false, "Enable volume resize metrics")
+	metricPath    = flag.String("metric-path", "/metrics", "Url path to access volume resize metrics")
+	metricAddress = flag.String("metric-address", "", "Address the metric server listen on")
 )
 
 func main() {
@@ -78,6 +82,17 @@ func main() {
 		}
 	}
 
+	var metricConfig *controller.MetricConfig
+	if *enableMetrics {
+		metricConfig = &controller.MetricConfig{
+			Path:    *metricPath,
+			Address: *metricAddress,
+		}
+		if len(metricConfig.Address) == 0 {
+			glog.Fatalf("Metric server address can't be empty")
+		}
+	}
+
 	rc := controller.NewResizeController(id, resizer.New(), kubeClient, *resyncPeriod)
-	rc.Run(*workers, wait.NeverStop, leaderElectionConfig)
+	rc.Run(*workers, wait.NeverStop, metricConfig, leaderElectionConfig)
 }
